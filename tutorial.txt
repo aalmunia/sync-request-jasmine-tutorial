@@ -1,0 +1,444 @@
+En este tutorial vamos a ver como usar dos módulos: sync-request y LokiDB. El primero sirve para realizar peticiones HTTP <b>SÍNCRONAS</b>, que veremos para qué podríamos utilizarlo. El segundo es un sistema de base de datos noSQL, similar a MongoDB, Cassandra, u otros. Su mayor virtud es la velocidad, pero ha sido elegido porque es muy sencillo de implementar.
+
+Primero, vamos a ver el código fuente de nuestro tutorial:
+
+<h4>app.js</h4>
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+/**
+ * Librería Express para responder a peticiones HTTP
+ */
+var express = require('express');
+
+/**
+ * Librería de utilidades implementada para este tutorial
+ */
+var RequestTools = require('./tools.js');
+
+/**
+ * Librería de base de datos en memoria LokiDB
+ */
+var LokiDatabaseLibrary = require('lokijs');
+
+/**
+ * Librería de parser del cuerpo de las peticiones HTTP
+ */
+var bodyParser = require('body-parser');
+
+/**
+ * Instanciamos un objeto de Express
+ */
+var oApp = express();
+
+/**
+ * Instanciamos un objeto de la librería de utilidades
+ */
+var oTool = new RequestTools();
+
+/**
+ * Implementamos el parseo de JSON, datos de formulario, y texto plano
+ */
+oApp.use(bodyParser.json());
+oApp.use(bodyParser.urlencoded({ extended: true }));
+oApp.use(bodyParser.text());
+
+/**
+ * Creamos una nueva base de datos LokiDB en el fichero cars.json.
+ * Creamos la colección 'cars', que contendrá los registros de los coches 
+ */
+var oLokiDB = new LokiDatabaseLibrary('cars.json');
+var oCarCollection = null;
+oCarCollection = oLokiDB.addCollection('cars');
+
+/**
+ * Ruta POST /create. Se usa para crear un registro de la entidad.
+ * Requiere de los parámetros siguientes:
+ * name, color, manufacturer, model, year
+ */
+oApp.post('/car/create', function(oRequest, oResponse) {
+    var oBody = oRequest.body;
+    var bFieldsOK = oTool.requiredFieldsExist(oBody, ['name', 'color', 'manufacturer', 'model', 'year']);
+    if (bFieldsOK === true) {
+        oCarCollection.insert(oBody);
+        oLokiDB.saveDatabase();
+        oTool.writeJSONResponse(oResponse, {
+            error: false
+        });
+    } else {
+        oTool.writeJSONResponse(oResponse, {
+            error: true,
+            error_message: 'No has pasado los parámetros requeridos'
+        });
+    }
+});
+
+/**
+ * Ruta POST /read. Se usa para leer un registro.
+ * Admite un parámetro: index, que indica el registro,
+ * empezando por el numero 1, a leer. Si no se pasa este
+ * parámetro se devuelve toda la colección
+ */
+oApp.post('/car/read', function(oRequest, oResponse) {
+    var oBody = oRequest.body;
+    var oCarsData = oCarCollection.data;
+    if (!oBody.hasOwnProperty('index')) {
+        oTool.writeJSONResponse(oResponse, oCarsData);
+    } else {
+        var iCar = parseInt(oBody.index);
+        var oCar = oCarCollection.get(iCar);
+        oTool.writeJSONResponse(oResponse, oCar);
+    }
+});
+
+/**
+ * Ruta POST /update. Se usa para actualizar un registro.
+ * Requiere que en el cuerpo se pase el objeto devuelto en la 
+ * lectura, con los campos cambiados a los nuevos datos que
+ * se quieren actualizar.
+ */
+oApp.post('/car/update', function(oRequest, oResponse) {
+    var oBody = oRequest.body;
+    if(!oBody.hasOwnProperty('$loki')) {
+        oTool.writeJSONResponse(oResponse, {
+            error: true,
+            error_message: 'Debes suministrarme el mismo objeto que te devuelve la base de datos, con las modiificaciones pertinentes'            
+        });
+    } else {        
+        oCarCollection.update(oBody);
+        oLokiDB.saveDatabase();
+        oTool.writeJSONResponse(oResponse, {
+            error: false
+        });      
+    }
+});
+
+/**
+ * Ruta POST /delete. Se usa para eliminar un registro.
+ * Requiere que en el cuerpo le pasemos el objeto que
+ * se devuelve en la lectura.
+ */
+oApp.post('/car/delete', function(oRequest, oResponse) {
+    var oBody = oRequest.body;
+    if(!oBody.hasOwnProperty('$loki')) {
+        oTool.writeJSONResponse(oResponse, {
+            error: true,
+            error_message: 'Debes suministrarme el mismo objeto que te devuelve la base de datos para poder eliminarlo'   
+        });
+    } else {
+        oCarCollection.remove(oBody);
+        oLokiDB.saveDatabase();
+        oTool.writeJSONResponse(oResponse, {
+            error: false            
+        });      
+    }
+});
+
+/**
+ * Ponemos la aplicación a escuchar en el puerto 9023
+ */
+oApp.listen(9023, function() {
+    console.log('App test sync-request en puerto 9023');
+});
+</pre>
+
+<h4>tools.js</h4>
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+/**
+ * Clase de utilidades para el tutorial
+ */
+function ToolsSyncRequest() {
+    if(!this instanceof ToolsSyncRequest) {
+        return new ToolsSyncRequest();
+    }
+}
+
+/**
+ * Método que revisa la existencia de los campos pedidos.
+ * @param {Object} oRequestBody El cuerpo de la petición HTTP, que es la estructura de JSON con los datos correspondientes
+ * @param {Array} aRequired Un array de nombres de campo requeridos.
+ */
+ToolsSyncRequest.prototype.requiredFieldsExist = function(oRequestBody, aRequired) {
+    var bExist = true;
+    var aFieldsBody = Object.keys(oRequestBody);
+    var iFieldsRequired = aRequired.length;
+     
+    for(var i = 0; i < iFieldsRequired; i++) {
+        if(!oRequestBody.hasOwnProperty(aRequired[i])) {
+            return false;
+        }                                
+    }    
+    return bExist;
+}
+
+/**
+ * Método que devuelve una estructura de datos JSON, usando el objeto de Response de Express
+ * @param {Object} oResponse El objeto de Response de Express
+ * @param {Object} oToWrite El objeto que se quiere devolver como JSON
+ */
+ToolsSyncRequest.prototype.writeJSONResponse = function(oResponse, oToWrite) {
+    oResponse.setHeader('Content-Type', 'application/json');
+    oResponse.write(JSON.stringify(oToWrite));
+    oResponse.end();
+}
+
+/**
+ * Exportamos la clase para su uso como módulo de node.js
+ */
+module.exports = ToolsSyncRequest;
+</pre>
+
+<h4>test.js</h4>
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+var SyncRequest = require('sync-request');
+var sURLServices = "http://127.0.0.1:9023/car/";
+
+var oCarToOperateWith = null;
+
+// TEST RUTA POST /car/create
+var oCarToCreate = {
+    name: "New Unit Test Car",
+    color: "Unit Test Color",
+    manufacturer: "Unit Test Manufacturer",
+    model: "Unit Test Model",
+    year: "Unit Test Year"
+};
+
+var oReqCarCreate = SyncRequest("POST", sURLServices + "create", {
+    json: oCarToCreate
+});
+var oResponseCarCreate = JSON.parse(oReqCarCreate.body);
+
+if(oResponseCarCreate !== undefined) {
+    if(oResponseCarCreate.hasOwnProperty('error')) {
+        if(oResponseCarCreate.error === true) {
+            console.log('Error creando nuevo registro, mensaje de error: ' + oResponseCarCreate.error_message);            
+        } else {
+            console.log('OK, registro de LokiDB creado');            
+        }
+    }    
+} else {
+    console.log('Error creando nuevo registro');
+}
+
+// TEST RUTA POST /car/read
+var oReqCarRead = SyncRequest("POST", sURLServices + "read");
+var oResponseCarRead = JSON.parse(oReqCarRead.body);
+
+if(oResponseCarRead !== undefined) {
+    if(oResponseCarRead[0].hasOwnProperty('$loki')) {
+        oCarToOperateWith = oResponseCarRead[0];
+        console.log('OK, devolviendo objetos de LokiDB');
+    }    
+} else {
+    console.log('Error en lectura');
+}
+
+
+// TEST RUTA POST /car/update
+oCarToOperateWith.name = "NOMBRE_CAMBIADO_EN_TEST_UNITARIO";
+var oReqCarUpdate = SyncRequest("POST", sURLServices + "update", {
+    json: oCarToOperateWith    
+});
+var oResponseCarUpdate = JSON.parse(oReqCarUpdate.body);
+
+if(oResponseCarUpdate !== undefined) {
+    if(oResponseCarUpdate.hasOwnProperty('error')) {
+        if(oResponseCarUpdate.error === true) {
+            console.log('Error actualizando registro, mensaje de error: ' + oResponseCarUpdate.error_message);            
+        } else {
+            console.log('OK, registro de LokiDB actualizado');
+        }     
+    } else {
+        console.log('Error en actualización');
+    } 
+} else {
+    console.log('Error en actualización');
+}
+
+
+// TEST RUTA POST /car/delete
+var oReqCarDelete = SyncRequest("POST", sURLServices + "delete", {
+    json: oCarToOperateWith    
+});
+var oResponseCarDelete = JSON.parse(oReqCarDelete.body);
+
+if(oResponseCarDelete !== undefined) {
+    if(oResponseCarDelete.hasOwnProperty('error')) {
+        if(oResponseCarDelete.error === true) {
+            console.log('Error borrando registro, mensaje de error: ' + oResponseCarDelete.error_message);                        
+        } else {
+            console.log('OK, registro eliminado correctamente');
+        }
+    }    
+} else {
+    console.log('Error en borrado de registro');    
+}
+</pre>
+
+Y ahora, realicemos un análisis del código fuente que hemos escrito. Empezamos por el fichero principal, <b>app.js</b>, que contiene las rutas de la aplicación. Hemos creado cuatro rutas, todas ellas con el método HTTP POST, para realizar las cuatro operaciones CRUD (Create, Read, Update, Delete) sobre la entidad <b>car</b>. Todas ellas realizan las operaciones pertinentes sobre la base de datos LokiDB. Es importante que tengamos en cuenta que LokiDB es una base de datos noSQL que vive en memoria. Esto significa que si detenemos el servicio de node, todos los datos que hayamos insertado desaparecerán.
+
+El fichero <b>tools.js</b> contiene dos métodos: uno que revisa la existencia (pero no comprueba el tipo de dato, ni el contenido), de las variables requeridas para cada servicio. El otro es un simple <i>wrapper</i> de la llamada a devolver JSON desde la aplicación de Express.
+
+Por último, el fichero <b>tests.js</b> contiene una serie de tests muy sencillos, que revisan que la aplicación se comporta como esperamos, y, por tanto, cumple con la especificación. Es importante que tengamos en cuenta que este fichero no está integrado dentro de ningún sistema de tests unitarios, es un script que hemos escrito para testear el API. Pero, ¿existe una forma mejor de hacer estos tests?
+
+La respuesta es si. Existen varias librerías para la realización de tests unitarios, pero vamos a coger <b>jasmine-node</b> por su sencillez de uso. Lo primero que debemos hacer es instalarlo. Para ello, ejecutaremos la siguiente instrucción en consola:
+
+<pre class="EnlighterJSRAW" data-enlighter-language="bash">
+sudo npm install -g jasmine
+</pre>
+
+De esa forma, <b>jasmine-node</b> quedará insalado globalmente en nuestro entorno, creando un script de bash en <b>/usr/local/bin/jasmine-node</b> para que podamos invocarlo desde la línea de comandos.
+
+Veamos a continuación como implementar nuestros tests unitarios. Para ello, y dado que vamos a testear un API REST, usaremos <b>sync-request</b>. La idea para ello es la siguiente: Existen formas de acceder a una ruta HTTP directamente implementadas en node.js, pero todas ellas funcionan de forma asíncrona. Esto, si bien es el día a día de node.js, es a menudo bastante engorroso para depende qué tarea queramos realizar. Para simplificar, tanto a nivel código como a nivel conceptual, la librería <b>sync-request</b> nos permite ejecutar una petición, y garantiza que en la siguiente línea de código, ya ha sido ejecutada, y el resultado de llamar a la ruta del API REST ya existe. Esto es muy útil, desde mi punto de vista, para organizar los tests.
+
+Veamos pues, como implementar nuestros tests con jasmine-node. Crearemos una carpeta llamada <b>spec</b>, en la que guardaremos los tests. Los ficheros que contengan tests unitarios debería llamarse <b>[loquesea]Spec.js</b>, porque jasmine busca los sufijos <b>Spec</b> para reconocer qué ficheros son de tipo test unitario. Esto es simplemente una convención, que recomiendo usemos.
+
+<h4>spec/appSpec.js</h4>
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+var SyncRequest = require('sync-request');
+var oCarToOperateWith = null;
+var sBaseURLServices = 'http://127.0.0.1:9023/car/';
+var oURLServices = {
+    CREATE: sBaseURLServices + 'create',
+    READ: sBaseURLServices + 'read',
+    UPDATE: sBaseURLServices + 'update',
+    DELETE: sBaseURLServices + 'delete'
+};
+
+describe("Tests unitarios de aplicación LokiDB + sync-request", function() {
+    
+    it("Test de ruta POST /car/create. Debería devolver {error: false}. PRIMER TEST UNITARIO.", function() {
+        oCarToOperateWith = {
+            name: "Test unitario jasmine-node. Campo name.",
+            color: "Test unitario jasmine-node. Campo color.",
+            manufacturer: "Test unitario jasmine-node. Campo manufacturer.",
+            model: "Test unitario jasmine-node. Campo model.",
+            year: "Test unitario jasmine-node. Campo year."
+        };
+        var oRequestCreate = SyncRequest("POST", oURLServices.CREATE, {
+            json: oCarToOperateWith            
+        });
+        var oResponseCreate = JSON.parse(oRequestCreate.body);        
+        expect(oResponseCreate.error).toBe(false);
+    });
+    
+    it("Test de ruta POST /car/create. Debería devolver {error: true}", function() {
+        oCarToOperateWith = {};
+        var oRequestCreate = SyncRequest("POST", oURLServices.CREATE, {
+            json: oCarToOperateWith            
+        });
+        var oResponseCreate = JSON.parse(oRequestCreate.body);        
+        expect(oResponseCreate.error).toBe(true);
+    });
+    
+    it("Test de ruta POST /car/read. Debería devolver como mínimo un registro", function() {
+        var oRequestRead = SyncRequest("POST", oURLServices.READ);
+        var oResponseRead = JSON.parse(oRequestRead.body);
+        expect(oResponseRead.length).toBeGreaterThan(0);
+        
+        oCarToOperateWith = oResponseRead[0];
+        expect(oCarToOperateWith.name).toBeDefined();
+        expect(oCarToOperateWith.color).toBeDefined();
+        expect(oCarToOperateWith.manufacturer).toBeDefined();
+        expect(oCarToOperateWith.model).toBeDefined();
+        expect(oCarToOperateWith.year).toBeDefined();
+    });
+    
+    it("Test de ruta POST /car/read. Debería devolver un elemento vacío", function() {
+        var oRequestRead = SyncRequest("POST", oURLServices.READ, {
+            json: {
+                index: 10
+            }
+        });
+        var oResponseRead = JSON.parse(oRequestRead.body);
+        expect(oResponseRead).toBeNull();
+    });
+    
+    it("Test de ruta POST /car/update. Debería devolver {error: false}", function() {
+        oCarToOperateWith.name = 'Nombre editado en test unitarios jasmine-node';        
+        var oRequestUpdate = SyncRequest("POST", oURLServices.UPDATE, {
+            json: oCarToOperateWith            
+        });
+        var oResponseUpdate = JSON.parse(oRequestUpdate.body);
+        expect(oResponseUpdate.error).toBe(false);                
+    });
+    
+    it("Test de ruta POST /car/update. Debería devolver {error: true}", function() {
+        var oIncorrectUpdateCar = {
+            name: 'Incorrecto, no tiene todos los campos',
+            color: 'Incorrecto, no tiene todos los campos',
+            model: 'Incorrecto, no tiene todos los campos'
+        };
+        var oRequestUpdate = SyncRequest("POST", oURLServices.UPDATE, {
+            json: oIncorrectUpdateCar            
+        });
+        var oResponseUpdate = JSON.parse(oRequestUpdate.body);
+        expect(oResponseUpdate.error).toBe(true);
+    });
+    
+    it("Test de ruta POST /car/delete. Debería devolver {error: true}", function() {
+        var oIncorrectDeleteCar = {
+            name: 'Incorrecto, no podremos borrarlo',
+            color: 'Incorrecto, no podremos borrarlo'            
+        };
+        var oRequestDelete = SyncRequest("POST", oURLServices.UPDATE, {
+            json: oIncorrectDeleteCar            
+        });
+        var oResponseDelete = JSON.parse(oRequestDelete.body);
+        expect(oResponseDelete.error).toBe(true);
+    });
+    
+    it("Test de ruta POST /car/delete. Debería devolver {error: false}. ULTIMO TEST UNITARIO." , function() {
+        var oRequestDelete = SyncRequest("POST", oURLServices.DELETE, {
+            json: oCarToOperateWith            
+        });
+        var oResponseDelete = JSON.parse(oRequestDelete.body);
+        expect(oResponseDelete.error).toBe(false);
+    });
+            
+});
+</pre>
+
+Vamos a ver la estructura que tienen los tests unitarios de jasmine viendo un ejemplo de tests que se cumple siempre:
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+describe("Suite de tests unitarios", function() {
+
+	it("Test 1", function() {
+		var bTrue = true;
+		expect(bTrue).toBe(true);
+		expect(bTrue).not.toBe(false);
+	});
+
+});
+</pre>
+
+Lo primero, la llamada a <b>describe</b> indica el inicio de la suite de testeo. Dentro del callback, la llamada a <b>it</b> inicia las aserciones que estén dentro del test. Las aserciones, en este caso son <b>.toBe(true)</b> y <b>.not.toBe(false)</b>. Dado que nuestra variable tiene un valor <i>true</i>, se cumplen ambas aserciones. Ahora, revisemos un poco el código que tenemos en la suite de testeo de nuestra aplicación:
+
+<pre class="EnlighterJSRAW" data-enlighter-language="javascript">
+it("Test de ruta POST /car/create. Debería devolver {error: false}. PRIMER TEST UNITARIO.", function() {
+	oCarToOperateWith = {
+		name: "Test unitario jasmine-node. Campo name.",
+		color: "Test unitario jasmine-node. Campo color.",
+		manufacturer: "Test unitario jasmine-node. Campo manufacturer.",
+		model: "Test unitario jasmine-node. Campo model.",
+		year: "Test unitario jasmine-node. Campo year."
+	};
+	var oRequestCreate = SyncRequest("POST", oURLServices.CREATE, {
+		json: oCarToOperateWith            
+	});
+	var oResponseCreate = JSON.parse(oRequestCreate.body);        
+	expect(oResponseCreate.error).toBe(false);
+});
+</pre>
+
+Describimos un objeto <b>oCarToOperateWith</b>, que hemos definido previamente como global a la suite de testeo. En el caso de este test, que es la creación de un nuevo registro de la entidad, rellenamos los datos requeridos, y llamamos a la ruta correspondiente. Como vemos, en la instrucción siguiente, podemos referenciar <b>oRequestCreate.body</b>, y saber que tiene valor. En un paradigma asíncrono, el valor de esa variable sería <b>undefined</b>. De este modo, podemos programar de una forma mas similar a JAVA, PHP, u otros lenguajes que no dependen tanto de callbacks y asincronicidad. Por último, realizamos la aserción de este test. Estamos seguros de que el objeto creado es correcto, por tanto, deberíamos recibir una estructura de datos JSON con un campo <b>error</b>, con valor false, para indicar que no se ha producido ningún error realizando la operación de creación de un nuevo registro.
+
+El resto de tests son sencillos de entender teniendo en cuenta estas premisas. Generalmente es una buena idea implementar tests que devuelven errores, así como resultados correctos. El siguiente test revisa precisamente eso: que si pasamos una estructura de datos incorrecta, el API devolverá un valor <i>true</i> para el campo <i>error</i> de la estructura de datos devuelta por el API.
+
+De esta forma, usando <b>jasmine-node</b> y <b>sync-request</b>, podemos realizar con sencillez tests unitarios para APIs REST escritas con node.js.
+
+El código de este tutorial puede descargarse del repositorio de github correspondiente: [link_github]
