@@ -441,4 +441,4 @@ El resto de tests son sencillos de entender teniendo en cuenta estas premisas. G
 
 De esta forma, usando <b>jasmine-node</b> y <b>sync-request</b>, podemos realizar con sencillez tests unitarios para APIs REST escritas con node.js.
 
-El código de este tutorial puede descargarse del repositorio de github correspondiente: [link_github]
+El código de este tutorial puede descargarse del repositorio de github correspondiente: https://github.com/aalmunia/sync-request-jasmine-tutorial
